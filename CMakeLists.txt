@@ -237,6 +237,15 @@ if(TARGET OpenAL AND CLANG)
 		endif()
 	endif()
 endif()
+# Package preparation reports extraction failures across these translation units.
+if(MSVC)
+	set(kyty_pkg_exception_flag /EHsc)
+else()
+	set(kyty_pkg_exception_flag -fexceptions)
+endif()
+set_property(SOURCE "${KYTY_SOURCE_DIR}/main.cpp" "${KYTY_TESTS_DIR}/PackageTests.cpp"
+	APPEND PROPERTY COMPILE_OPTIONS "${kyty_pkg_exception_flag}")
+
 add_subdirectory("${KYTY_SOURCE_DIR}/common" "${CMAKE_CURRENT_BINARY_DIR}/common")
 
 file(GLOB kyty_emulator_src CONFIGURE_DEPENDS
