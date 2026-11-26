@@ -1,6 +1,12 @@
 #include "common/archive.h"
 #include "common/common.h"
 #include "common/file.h"
+#include "common/package.h"
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_process.h>
+#include <cstdlib>
+#include <memory>
+#include <stdexcept>
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "emulator.h"
@@ -21,9 +27,9 @@ static void PrintUsage() {
 	::printf("%s, %s, ver = %s, git = %s, date = %s\n",
 	         KYTY_BUILD == KYTY_BUILD_DEBUG ? "Debug" : "Release", KYTY_TOOLCHAIN, KYTY_VERSION,
 	         KYTY_GIT_VERSION, __DATE__);
-	::printf("kyty_emulator --game <dir|elf|zar> [options]\n\n");
+	::printf("kyty_emulator --game <dir|elf|zar|pkg> [options]\n\n");
 	::printf("Options:\n");
-	::printf("  --game <dir|elf|zar>                 Game directory, ELF, or ZArchive to load.\n");
+	::printf("  --game <dir|elf|zar|pkg>                 Game directory, ELF, ZArchive, or PS5 debug PKG.\n");
 	::printf("  --game-patch <json>                  ETAHen cheat file.\n");
 	::printf("  --addcont-dir <dir>                  Add-ons (DLC) folder (default: none).\n");
 	::printf(
@@ -271,6 +277,9 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 			if (Common::File::IsDirectoryExisting(path)) {
 				options.app0_dir = path;
 				options.elf      = "/app0/eboot.bin";
+			} else if (Common::Package::IsFilename(path) && Common::File::IsFileExisting(path)) {
+				options.app0_dir = path;
+				options.elf = "/app0/eboot.bin";
 			} else if (Common::IsSupportedArchive(path) && Common::File::IsFileExisting(path)) {
 				const auto root = Common::MakeArchivePath(path);
 				if (!Common::File::IsFileExisting(root / "eboot.bin")) {
@@ -467,6 +476,23 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 	return show_help || (!options.app0_dir.empty() && !options.elf.empty());
 }
 
+static void ExtractPackage(const std::filesystem::path& package, const std::filesystem::path& staging) {
+	const auto input = Common::PathToString(package);
+	const auto output = Common::PathToString(staging);
+	const char* helper = std::getenv("KYTY_PKG_EXTRACTOR");
+	const char* args[] = {helper && *helper ? helper : "pkg-to-anyps5",
+	                      input.c_str(), output.c_str(), "--verbose", nullptr};
+	std::unique_ptr<SDL_Process, decltype(&SDL_DestroyProcess)> process(
+	    SDL_CreateProcess(args, false), SDL_DestroyProcess);
+	if (!process) {
+		throw std::runtime_error(std::string("Cannot start pkg-to-anyps5. Install it on PATH or set KYTY_PKG_EXTRACTOR. ") + SDL_GetError());
+	}
+	int status = -1;
+	if (!SDL_WaitProcess(process.get(), true, &status) || status != 0) {
+		throw std::runtime_error("PKG extraction failed. See the extractor output above.");
+	}
+}
+
 static int Main(int argc, char* argv[]) {
 	InitializeThreads();
 
@@ -488,6 +514,17 @@ static int Main(int argc, char* argv[]) {
 		return 0;
 	}
 
+	if (Common::Package::IsFilename(options.app0_dir) && std::filesystem::is_regular_file(options.app0_dir)) {
+		try {
+			std::unique_ptr<char, decltype(&SDL_free)> pref(SDL_GetPrefPath("Kyty", "KytyPS5"), SDL_free);
+			if (!pref) throw std::runtime_error(SDL_GetError());
+			options.app0_dir = Common::Package::Prepare(options.app0_dir,
+			    Common::PathFromUtf8(pref.get()) / "packages", ExtractPackage);
+		} catch (const std::exception& e) {
+			std::fprintf(stderr, "PKG boot failed: %s\n", e.what());
+			return 1;
+		}
+	}
 	Run(options);
 
 	return 0;

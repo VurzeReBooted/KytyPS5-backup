@@ -472,6 +472,7 @@ target_include_directories(page_manager_tests PRIVATE ${inc_headers})
 
 add_executable(archive_file_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/ArchiveFileTests.cpp"
+	"${KYTY_TESTS_DIR}/PackageTests.cpp"
 )
 target_link_libraries(archive_file_tests common ZArchive::zarchive)
 target_include_directories(archive_file_tests PRIVATE ${inc_headers})

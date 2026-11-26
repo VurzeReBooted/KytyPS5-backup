@@ -395,6 +395,29 @@ folders recursively for game directories containing `eboot.bin` and ZArchive (`.
 whose archive root contains `eboot.bin`. Select a detected game and run it from the game list.
 ZArchive dumps are mounted read-only and streamed directly; they do not need to be extracted first.
 
+The same scan discovers PS5 finalized-image packages (`.pkg`, case-insensitive), including in
+subfolders. It reads title details and artwork from the package metadata without unpacking the game.
+Encrypted retail packages are labeled in the list. Boot supports unencrypted debug packages with
+a NAPS filesystem layout supported by the extractor.
+
+For PKG boot, install [pkg-to-anyps5](https://github.com/awake-devel/pkg-to-anyps5)
+on your PATH, or set `KYTY_PKG_EXTRACTOR` to its absolute executable path. With Rust 1.88 or later:
+
+```sh
+cargo install --locked --git https://github.com/awake-devel/pkg-to-anyps5 --rev 2e9b12267840f9777f8d825335c4b4938160d9c4
+```
+
+Select the package and click **Run**, or pass it directly to the emulator:
+
+```sh
+kyty_emulator --game "/games/ExampleGame.pkg"
+```
+
+The first launch needs enough free space for the unpacked game. Kyty stores the prepared game
+in the `packages` subfolder of its SDL per-user preferences directory (organization `Kyty`, app
+`KytyPS5`). Later launches reuse it. Moving or updating the package creates a new cache entry.
+You can remove old entries while the emulator is closed.
+
 Official release builds include a built-in updater. Leave **Check for updates on startup** enabled,
 or click **Check for updates**, then choose **Install Update**. The launcher downloads the package
 for your platform from GitHub, checks its SHA-256 checksum, and restarts after installation. Close

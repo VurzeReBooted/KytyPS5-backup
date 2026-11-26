@@ -176,7 +176,7 @@ ConfigurationItem::ConfigurationItem(std::unique_ptr<Configuration> info, QTreeW
 			return -1;
 		}
 		const QFileInfo info(path);
-		if (GameContent::IsArchive(path)) {
+		if (GameContent::IsContainer(path)) {
 			return info.size();
 		}
 		if (!QDir(path).exists()) {

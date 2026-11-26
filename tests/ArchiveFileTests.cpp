@@ -256,7 +256,10 @@ void CheckCancellation(const std::filesystem::path &path,
 
 } // namespace
 
+void TestPackages();
+
 int main() {
+  TestPackages();
   TempDirectory temporary;
   const auto archive_path =
       temporary.Path() / std::filesystem::path(u8"game-テスト.zar");

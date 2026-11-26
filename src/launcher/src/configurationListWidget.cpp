@@ -3,6 +3,7 @@
 #include "additionalContentDialog.h"
 #include "cheatFile.h"
 #include "common/archive.h"
+#include "common/package.h"
 #include "common/trophies.h"
 #include "compatibilityDatabase.h"
 #include "configuration.h"
@@ -693,8 +694,14 @@ void ConfigurationListWidget::ScanGameDirectory() {
 		}
 		// Keep the index and decompression cache alive through validation, metadata and icon
 		// reads, after rejecting duplicate candidates from overlapping game folders.
-		const auto reader = archive ? Common::OpenArchive(GameContent::ToPath(base)) : nullptr;
-		if (archive && (reader == nullptr || !GameContent::FileExists(base, eboot_name))) {
+		const auto path = GameContent::ToPath(base);
+		const bool package = archive && Common::Package::IsFilename(path);
+		const auto kind = package ? Common::Package::Inspect(path) : Common::Package::Kind::Invalid;
+		if (package && kind == Common::Package::Kind::Invalid) {
+			return;
+		}
+		const auto reader = archive && !package ? Common::OpenArchive(path) : nullptr;
+		if (archive && !package && (reader == nullptr || !GameContent::FileExists(base, eboot_name))) {
 			return;
 		}
 		found_games.insert(game_key);
@@ -708,6 +715,9 @@ void ConfigurationListWidget::ScanGameDirectory() {
 		    FindCustomInfo(&m_custom_infos, game_path, legacy_game_path) != nullptr;
 
 		SetGameFiles(*info, base, game_path, metadata, archive);
+		if (kind == Common::Package::Kind::Retail) {
+			info->name = tr("%1 (encrypted PKG)").arg(info->name);
+		}
 		const auto* compatibility = m_compatibility->Find(info->title_id);
 		if (compatibility != nullptr) {
 			info->game_status  = compatibility->status;
@@ -764,7 +774,8 @@ void ConfigurationListWidget::ScanGameDirectory() {
 		const auto entries = directory.entryInfoList(QDir::Files | QDir::NoSymLinks, QDir::Name);
 		for (const auto& archive: entries) {
 			const auto base = archive.absoluteFilePath();
-			if (!Common::IsSupportedArchive(GameContent::ToPath(base))) {
+			const auto path = GameContent::ToPath(base);
+			if (!Common::IsSupportedArchive(path) && !Common::Package::IsFilename(path)) {
 				continue;
 			}
 			add_game(base, QDir::cleanPath(base), root.relativeFilePath(base),
@@ -1063,7 +1074,7 @@ void ConfigurationListWidget::open_game_folder() {
 	}
 
 	const auto base       = item->GetInfo().basedir;
-	const bool is_archive = GameContent::IsArchive(base);
+	const bool is_archive = GameContent::IsContainer(base);
 	const QDir game_dir(is_archive ? QFileInfo(base).absolutePath() : base);
 	if (!game_dir.exists()) {
 		QMessageBox::warning(this, tr("Open game folder"), tr("Game folder does not exist."));
@@ -1365,7 +1376,7 @@ void ConfigurationListWidget::ShowContextMenu(QTreeWidgetItem* witem) {
 	if (item != nullptr) {
 		action_run->setDisabled(item->IsRunning());
 		const auto& base = item->GetInfo().basedir;
-		action_open_folder->setDisabled(!QDir(base).exists() && !GameContent::IsArchive(base));
+		action_open_folder->setDisabled(!QDir(base).exists() && !GameContent::IsContainer(base));
 		action_view_trophies->setDisabled(!has_trophy_data);
 		action_compress->setDisabled(item->IsRunning() || !QDir(base).exists());
 		action_remove_save_data->setDisabled(item->IsRunning() || save_data_dirs.isEmpty());
