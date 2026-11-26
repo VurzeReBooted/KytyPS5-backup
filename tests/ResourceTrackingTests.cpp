@@ -7298,6 +7298,37 @@ void TestGpuSelectedFormattedRecordStore() {
     CheckFatal([&] { make(stride, shift, split); }, "not a valid runtime value",
                "exact record store accepted an unbounded, wrapping or split descriptor offset");
 
+  {
+    constexpr uint32_t rows = 196608u;
+    constexpr uint32_t prefix = 448u;
+    auto packed_fixture = make(16u, 8u);
+    const auto packed_plan = ExtractResourcePlan(packed_fixture->program);
+    LinearTestMemory packed;
+    packed.words.resize(prefix / 4u + rows * 4u);
+    const std::array<uint32_t, 4> entry{0x100000u, 1u << 16u, 20u,
+        (uint32_t(Prospero::BufferFormat::k8SInt) << 12u) | 4u};
+    for (const uint32_t row : {0u, 65536u, rows - 1u})
+      std::ranges::copy(entry, packed.words.begin() + prefix / 4u + row * 4u);
+    packed.words[prefix / 4u + (rows - 1u) * 4u] += 32u;
+    const std::array<uint32_t, 8> packed_data{uint32_t(packed.base), 16u << 16u,
+        rows + prefix / 16u, 0x5204u};
+    const SrtRuntime packed_runtime{.user_data = packed_data, .userdata = &packed,
+        .read_specialization_memory = ReadLinearTestMemory};
+    Check(MaterializeResources(packed_plan, packed_runtime, snapshot, specialization),
+          "large packed buffer table failed to materialize");
+    const auto offset = specialization.buffers[root].indirect_mapping_offset;
+    Check(snapshot.buffers.size() == packed_plan.info.buffers.size() + 2u &&
+              snapshot.flattened_srt.at(offset) == rows &&
+              snapshot.flattened_srt.at(offset + 1u) == 1u &&
+              snapshot.flattened_srt.at(offset + 2u) == 0u &&
+              snapshot.flattened_srt.at(offset + 65537u) == 1u &&
+              snapshot.flattened_srt.at(offset + rows) == 2u && packed.reads < 100u,
+          "packed buffer table lost a late, null or duplicate entry, or read slots individually");
+    packed.fail_address = packed.base + prefix + (rows - 1u) * 16u;
+    Check(!MaterializeResources(packed_plan, packed_runtime, snapshot, specialization),
+          "unreadable final packed buffer batch was accepted");
+  }
+
   auto wide = make(16u, 16u, false, true);
   auto wide_plan = ExtractResourcePlan(wide->program);
   uint32_t wide_root = UINT32_MAX;
