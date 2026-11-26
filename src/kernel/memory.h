@@ -130,6 +130,7 @@ void                   RegisterCallbacks(callback_func_t alloc_func, callback_fu
 int AllocateDirectMemory(int64_t search_start, int64_t search_end, size_t size, size_t alignment,
                          int memory_type, int64_t* phys_addr_out, bool automatic = false);
 int MapAutomaticMemory(uint64_t vaddr, size_t size, int type, int prot);
+int AllocatePrtMemory(uint64_t vaddr, size_t size, int type, int prot);
 int MapPrtMemory(uint64_t vaddr, size_t size);
 int RemapIntoPrtMemory(uint64_t prt_vaddr, uint64_t old_vaddr, size_t size, int prot);
 int UnmapAmmMemory(uint64_t vaddr, size_t size);

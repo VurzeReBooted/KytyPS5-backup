@@ -576,6 +576,7 @@ enum class AmmCommandKind : uint32_t {
 	MapAuto,
 	MapDirect,
 	MapAsPrt,
+	AllocatePrt,
 	RemapIntoPrt,
 	Unmap,
 };
@@ -1025,6 +1026,10 @@ static int ExecuteAmmMapCommand(const CommandBufferState::AmmMapCommand& command
 	if (command.kind == AmmCommandKind::MapAuto) {
 		return LibKernel::Memory::MapAutomaticMemory(command.va, command.size, command.type,
 		                                             NormalizeAmmProtection(command.prot));
+	}
+	if (command.kind == AmmCommandKind::AllocatePrt) {
+		return LibKernel::Memory::AllocatePrtMemory(command.va, command.size, command.type,
+		                                            NormalizeAmmProtection(command.prot));
 	}
 	if (command.kind == AmmCommandKind::MapAsPrt) {
 		return LibKernel::Memory::MapPrtMemory(command.va, command.size);
@@ -2204,6 +2209,35 @@ static int KYTY_SYSV_ABI AmmCommandBufferMapDirectWithGpuMaskId(void* command_bu
 	           : LibKernel::KERNEL_ERROR_EBUSY;
 }
 
+static int64_t KYTY_SYSV_ABI MeasureAllocatePaForPrt(uint64_t va, uint64_t size, int32_t type, int32_t prot) {
+	if (!ValidateAmmMapArgs(va, size) || (va >> 48) != 0 || (size >> 41) != 0 ||
+	    type < 0 || type > 31 || (prot & ~0x3f3) != 0) return LibKernel::KERNEL_ERROR_EINVAL;
+	return 4 * sizeof(uint32_t);
+}
+
+static int KYTY_SYSV_ABI AmmCommandBufferAllocatePaForPrt(void* buffer, uint64_t va, uint64_t size,
+                                                         int32_t type, int32_t prot) {
+	const auto bytes = MeasureAllocatePaForPrt(va, size, type, prot);
+	if (buffer == nullptr || bytes < 0) return LibKernel::KERNEL_ERROR_EINVAL;
+	CommandBufferState::AmmMapCommand command {};
+	command.kind = AmmCommandKind::AllocatePrt;
+	command.va = va;
+	command.size = size;
+	command.type = type;
+	command.prot = prot;
+	auto* record = AppendCommandRecord(reinterpret_cast<uint64_t>(buffer), command, bytes);
+	if (!record) return LibKernel::KERNEL_ERROR_EBUSY;
+	// AMPR write transfers use the CPU on the host. Each domain's write bit
+	// also implies its read bit in the kernel command encoding.
+	const uint32_t effective = (prot & PROT_AMPR_WRITE) != 0 ? prot | PROT_CPU_READ | PROT_CPU_WRITE : prot;
+	const uint32_t encoded = effective | ((effective >> 1) & 0x141u);
+	record[0] = 0x326u | (static_cast<uint32_t>(type) << 27) | (encoded << 12);
+	record[1] = static_cast<uint32_t>(va >> 14);
+	record[2] = 0x40000000u | static_cast<uint32_t>((size >> 12) | ((va >> 46) & 3));
+	record[3] = 1019;
+	return OK;
+}
+
 static int KYTY_SYSV_ABI AmmCommandBufferMapAsPrt(void* command_buffer, uint64_t va,
                                                   uint64_t size) {
 	PRINT_NAME();
@@ -2473,6 +2507,8 @@ LIB_DEFINE(InitAmpr_1) {
 	LIB_FUNC("ojBkmG7+CgE", Ampr::AmmCommandBufferMapWithGpuMaskId);
 	LIB_FUNC("8TBE+9XCZbI", Ampr::AmmCommandBufferMapDirect);
 	LIB_FUNC("kOfZlhbVAkc", Ampr::AmmCommandBufferMapDirectWithGpuMaskId);
+	LIB_FUNC("d3lKWPM6odc", Ampr::AmmCommandBufferAllocatePaForPrt);
+	LIB_FUNC("2yYv9QWB3hU", Ampr::MeasureAllocatePaForPrt);
 	LIB_FUNC("ZJCgt+aPHAU", Ampr::AmmCommandBufferMapAsPrt);
 	LIB_FUNC("0Xo9g4goDXU", Ampr::AmmCommandBufferRemapIntoPrt);
 	LIB_FUNC("3A2X6OCHtnA", Ampr::AmmCommandBufferUnmapToPrt);

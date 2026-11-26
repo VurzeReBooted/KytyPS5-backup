@@ -214,6 +214,7 @@ public:
 		int              memory_type    = 0;
 		VirtualRangeType type           = VirtualRangeType::Reserved;
 		bool             disallow_merge = false;
+		bool             prt = false;
 		char             name[KERNEL_MAXIMUM_NAME_LENGTH];
 	};
 
@@ -328,6 +329,13 @@ public:
 		EditUnlocked(start, size, [name](Range* r) { CopyVirtualRangeName(r->name, name); });
 	}
 
+	void MarkPrt(uint64_t start, uint64_t size, int memory_type) {
+		EditUnlocked(start, size, [memory_type](Range* r) {
+			r->prt = true;
+			r->memory_type = memory_type;
+		});
+	}
+
 	void Protect(uint64_t start, uint64_t size, int protection) {
 		EditUnlocked(start, size, [protection](Range* r) { r->protection = protection; });
 	}
@@ -435,7 +443,7 @@ private:
 			return false;
 		}
 
-		return left.type == right.type && left.protection == right.protection &&
+		return left.type == right.type && left.prt == right.prt && left.protection == right.protection &&
 		       left.memory_type == right.memory_type &&
 		       std::strncmp(left.name, right.name, KERNEL_MAXIMUM_NAME_LENGTH) == 0;
 	}
@@ -1895,7 +1903,12 @@ static bool IsAmmMemoryRange(uint64_t vaddr, size_t size) {
 int MapPrtMemory(uint64_t vaddr, size_t size) {
 	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
 	if (!IsAmmMemoryRange(vaddr, size)) return KERNEL_ERROR_EINVAL;
-	return ReplaceFixedRangeWithReserved(vaddr, size);
+	const int result = ReplaceFixedRangeWithReserved(vaddr, size);
+	if (result == OK) {
+		std::lock_guard state(g_memory_state_mutex);
+		g_virtual_ranges->MarkPrt(vaddr, size, 0);
+	}
+	return result;
 }
 
 int UnmapAmmMemory(uint64_t vaddr, size_t size) {
@@ -2399,6 +2412,42 @@ int MapAutomaticMemory(uint64_t vaddr, size_t size, int type, int prot) {
 	return OK;
 }
 
+// Preserve backing and contents on repeated allocations. Acquire missing runs before
+// changing the protections of any pages the guest can already access.
+int AllocatePrtMemory(uint64_t vaddr, size_t size, int type, int prot) {
+	std::lock_guard<std::recursive_mutex> operation(g_memory_operation_mutex);
+	VirtualMemory::Mode mode {};
+	if (!IsAmmMemoryRange(vaddr, size) || !DecodeMemoryProtection(prot, &mode) ||
+	    (prot & PROT_CPU_EXEC) != 0) return KERNEL_ERROR_EINVAL;
+	std::vector<VirtualRanges::Range> ranges;
+	if (!g_virtual_ranges->QuerySpan(vaddr, size, &ranges) ||
+	    std::any_of(ranges.begin(), ranges.end(), [](const auto& r) { return !r.prt; })) {
+		return KERNEL_ERROR_EACCES;
+	}
+	for (auto it = ranges.begin(); it != ranges.end(); ++it) {
+		if (it->type != VirtualRangeType::Reserved) continue;
+		const int result = MapAutomaticMemory(it->start, it->size, type, prot);
+		if (result != OK) {
+			for (auto prior = ranges.begin(); prior != it; ++prior) {
+				if (prior->type == VirtualRangeType::Reserved) {
+					const auto restored = MapPrtMemory(prior->start, prior->size);
+					EXIT_IF(restored != OK);
+				}
+			}
+			return result;
+		}
+	}
+	for (const auto& r: ranges) {
+		if (r.type == VirtualRangeType::Direct) {
+			const auto result = KernelMprotect(reinterpret_cast<void*>(r.start), r.size, prot);
+			EXIT_IF(result != OK);
+		}
+	}
+	std::lock_guard state(g_memory_state_mutex);
+	g_virtual_ranges->MarkPrt(vaddr, size, type);
+	return OK;
+}
+
 // Moves a mapped range onto PRT addresses; the pages keep their memory type.
 int RemapIntoPrtMemory(uint64_t prt_vaddr, uint64_t old_vaddr, size_t size, int prot) {
 	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
@@ -2420,6 +2469,8 @@ int RemapIntoPrtMemory(uint64_t prt_vaddr, uint64_t old_vaddr, size_t size, int 
 		EXIT_IF(MapDirectMemory(&address, range.size, prot, 0x10,
 		                        static_cast<int64_t>(range.offset), PRT_PAGE_SIZE, "",
 		                        range.memory_type) != OK);
+		std::lock_guard state(g_memory_state_mutex);
+		g_virtual_ranges->MarkPrt(reinterpret_cast<uint64_t>(address), range.size, range.memory_type);
 	}
 	UnmapMemoryOwners(ranges, [] {});
 	return OK;

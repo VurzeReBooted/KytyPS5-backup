@@ -3914,6 +3914,34 @@ void TestAmmMapAsPrt() {
 	std::printf("[host]    %-48s ok\n", test);
 }
 
+void TestAmmAllocatePaForPrt() {
+	using namespace Libs::LibKernel::Memory;
+	const char* test = "AmmAllocatePaForPrt";
+	constexpr uint64_t page = SceKernelPageSize;
+	constexpr uint64_t base = kExtendedMemoryBase + 0x40000000;
+	int64_t physical = -1;
+	CheckOk(test, AllocateDirectMemory(0, KernelGetDirectMemorySize(), 2 * page, page, 0,
+	                                   &physical, true), "donate backing");
+	CheckOk(test, MapPrtMemory(base, 3 * page), "reserve PRT");
+	AmmCommandBuffer commands(test);
+	const auto allocate = commands.Find<int(KYTY_SYSV_ABI*)(void*, uint64_t, uint64_t, int32_t, int32_t)>("d3lKWPM6odc");
+	const auto measure = commands.Find<int64_t(KYTY_SYSV_ABI*)(uint64_t, uint64_t, int32_t, int32_t)>("2yYv9QWB3hU");
+	CheckOk(test, allocate(commands.header.data(), base, page, SceKernelMtypeC, SceKernelProtCpuRw), "append");
+	Check(test, commands.Offset() == 16 && commands.Offset() == measure(base, page, SceKernelMtypeC, SceKernelProtCpuRw), "measure");
+	Check(test, commands.Submit().result == OK, "submit");
+	auto* word = reinterpret_cast<volatile uint64_t*>(base);
+	*word = 0x123456789abcdef0ull;
+	Check(test, AllocatePrtMemory(base, 3 * page, SceKernelMtypeC, SceKernelProtCpuRead) ==
+	      Libs::LibKernel::KERNEL_ERROR_EAGAIN, "exhausted pool");
+	Check(test, Query(test, base).protection == SceKernelProtCpuRw, "failed operation changed protection");
+	CheckOk(test, AllocatePrtMemory(base, 2 * page, SceKernelMtypeC, SceKernelProtCpuRead), "extend across backed page");
+	Check(test, *word == 0x123456789abcdef0ull, "reallocation lost data");
+	Check(test, Query(test, base).protection == SceKernelProtCpuRead, "reallocation did not update protection");
+	Check(test, Query(test, base + page).is_committed != 0 && Query(test, base + 2 * page).is_committed == 0, "wrong page coverage");
+	CheckOk(test, UnmapAmmMemory(base, 3 * page), "unmap");
+	CheckOk(test, KernelCheckedReleaseDirectMemory(physical, 2 * page), "release donation");
+}
+
 void TestAmmRemapIntoPrt() {
 	using namespace Libs::LibKernel::Memory;
 	const char*        test     = "AmmRemapIntoPrt";
@@ -6197,6 +6225,7 @@ int main(int argc, char** argv) {
 		RunTest(TestDirectMappingNamesTypesAndValidation);
 		RunTest(TestAutomaticMemoryReuseAndAliases);
 		RunTest(TestAmmMapAsPrt);
+		RunTest(TestAmmAllocatePaForPrt);
 		RunTest(TestAmmRemapIntoPrt);
 		RunTest(TestAutomaticMemoryFragmentedMap);
 		RunTest(TestFragmentedMemoryPoolBacking);
@@ -6363,6 +6392,7 @@ int main(int argc, char** argv) {
 	RunTest(TestExtendedAndUserMappingsDoNotAlias);
 	RunTest(TestAutomaticMemoryReuseAndAliases);
 	RunTest(TestAmmMapAsPrt);
+	RunTest(TestAmmAllocatePaForPrt);
 	RunTest(TestAmmRemapIntoPrt);
 	RunTest(TestAmmSubmitReusedHeaderStorage);
 	RunTest(TestAutomaticMemoryFragmentedMap);

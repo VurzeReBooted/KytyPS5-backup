@@ -9,7 +9,16 @@ namespace Graphics::Agc {
 
 LIB_NAME("Agc", "Agc");
 
+static uint32_t KYTY_SYSV_ABI AtomicMemGetSize() { return 9 * sizeof(uint32_t); }
+static uint64_t KYTY_SYSV_ABI AcbEventWriteGetSize(uint8_t) { return 2 * sizeof(uint32_t); }
+static uint32_t KYTY_SYSV_ABI StallCommandBufferParserGetSize() { return 2 * sizeof(uint32_t); }
+
 LIB_DEFINE(InitAgcDriver_1) {
+	LIB_FUNC("da1Sm8-QDoU", AtomicMemGetSize);
+	LIB_FUNC("oz6zQq1JwCE", AtomicMemGetSize);
+	LIB_FUNC("0ZOG0jc9nRg", AgcDcbRewindGetSize);
+	LIB_FUNC("Y-5vneiBtzk", AcbEventWriteGetSize);
+	LIB_FUNC("+u6dKSLWM2o", StallCommandBufferParserGetSize);
 	LIB_FUNC("23LRUSvYu1M", AgcInit);
 	LIB_FUNC("2JtWUUiYBXs", AgcGetRegisterDefaults2);
 	LIB_FUNC("wRbq6ZjNop4", AgcGetRegisterDefaults2Internal);
