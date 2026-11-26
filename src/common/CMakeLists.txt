@@ -10,8 +10,6 @@ if(KYTY_CLANG_CL)
 	set_source_files_properties(${common_src} PROPERTIES COMPILE_FLAGS "-Wno-pragma-pack")
 endif()
 
-set_property(SOURCE package.cpp APPEND PROPERTY COMPILE_OPTIONS "${kyty_pkg_exception_flag}")
-
 add_library(common STATIC ${common_src} ${common_headers})
 
 set(localization_dir "${PROJECT_SOURCE_DIR}/assets/localization")
@@ -42,6 +40,7 @@ target_link_libraries(common
 		cpuinfo
 		kyty_git_version
 		spdlog::spdlog
+		SDL3::SDL3-static
 		ZArchive::zarchive
 		nlohmann_json::nlohmann_json
 )

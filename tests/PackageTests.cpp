@@ -1,4 +1,8 @@
 #include "common/package.h"
+#include "common/archive.h"
+#include "loader/elf.h"
+
+#include <algorithm>
 
 #include <fstream>
 #include <random>
@@ -35,47 +39,14 @@ static void WriteFixture(const fs::path& path, bool retail = false) {
 
 static void Test(const fs::path& root) {
 	const auto pkg = root / "a space.PkG";
-	const auto cache = root / "cache";
 	WriteFixture(pkg);
 	Check(P::IsFilename(pkg) && !P::IsFilename("title.pkg.old"), "filename match");
 	Check(P::Inspect(pkg) == P::Kind::Debug, "debug scan");
 	Check(P::ReadMetadata(pkg, "sce_sys/param.json", 2) == std::vector<char>{'{', '}'}, "metadata");
 	Check(P::ReadMetadata(pkg, "sce_sys/param.json", 1).empty(), "metadata limit");
 
-	int runs = 0;
-	auto extract = [&](const fs::path& input, const fs::path& out) {
-		Check(input == pkg, "input path");
-		++runs;
-		fs::create_directories(out / "source/modules");
-		fs::create_directories(out / "app0/modules");
-		std::ofstream(out / "source/eboot.bin") << "elf";
-		std::ofstream(out / "source/modules/lib.prx") << "decoded";
-		std::ofstream(out / "app0/modules/lib.prx") << "original";
-		std::ofstream(out / "app0/asset") << "asset";
-	};
-	const auto app = P::Prepare(pkg, cache, extract);
-	std::string module;
-	std::ifstream(app / "modules/lib.prx") >> module;
-	Check(module == "decoded" && fs::is_regular_file(app / "asset"), "merged tree");
-	Check(P::Prepare(pkg, cache, extract) == app && runs == 1, "cache reuse");
-	std::ofstream(pkg, std::ios::app) << "x";
-	Check(P::Prepare(pkg, cache, extract) != app && runs == 2, "cache invalidation");
-
-	const auto failed = root / "failed";
-	try {
-		P::Prepare(pkg, failed, [](const auto&, const auto&) {});
-		throw std::logic_error("booted without executable");
-	} catch (const std::runtime_error&) {}
-	Check(fs::is_empty(failed), "partial cache after failure");
-	Check(fs::exists(P::Prepare(pkg, failed, extract) / "eboot.bin"), "retry");
-
 	WriteFixture(pkg, true);
 	Check(P::Inspect(pkg) == P::Kind::Retail, "retail detection");
-	try {
-		P::Prepare(pkg, cache, extract);
-		throw std::logic_error("accepted encrypted input");
-	} catch (const std::runtime_error&) {}
-	Check(runs == 3, "invoked helper for retail");
 	fs::resize_file(pkg, 650);
 	Check(P::Inspect(pkg) == P::Kind::Invalid, "truncated entry table");
 }
@@ -88,4 +59,31 @@ void TestPackages() {
 		~Cleanup() { std::error_code ec; fs::remove_all(root, ec); }
 	} cleanup {root};
 	Test(root);
+}
+
+int TestPackageMount(const fs::path& path) {
+	const auto reader = Common::OpenArchive(path);
+	Check(reader != nullptr, "open PKG");
+	const auto root = Common::MakeArchivePath(path);
+	const auto children = Common::GetArchiveDirEntries(root);
+	Check(std::ranges::any_of(children, [](const auto& e) { return !e.is_file && e.name == "data"; }), "directory listing");
+	auto read = [&](const fs::path& name, uint64_t offset, uint32_t size) {
+		auto f = Common::OpenArchiveFile(root / name);
+		Check(f && f->Seek(offset), "open member");
+		std::string result(size, ' ');
+		uint32_t got = 0;
+		f->Read(result.data(), size, &got);
+		result.resize(got);
+		return result;
+	};
+	Check(read("data/asset", 2, 8) == "foreAFTE", "cross-block read");
+	Loader::Elf64 executable;
+	executable.Open(root / "eboot.bin");
+	Check(executable.IsValid() && executable.IsNextGen() && executable.IsSelf(), "load PS5 SELF");
+	std::string segment(4, ' ');
+	executable.LoadSegment(reinterpret_cast<uintptr_t>(segment.data()), 0x1000, segment.size());
+	Check(segment == "TEST", "load SELF segment from PKG");
+	Check(read("sce_sys/param.json", 0, 8) == "{}", "read CNT metadata to EOF");
+	Check(read("data/asset", 6, 5) == "AFTER", "out-of-order seek");
+	return 0;
 }

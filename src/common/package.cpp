@@ -2,8 +2,6 @@
 
 #include <array>
 #include <fstream>
-#include <random>
-#include <stdexcept>
 #include <string>
 
 namespace Common::Package {
@@ -57,19 +55,6 @@ Header ReadHeader(std::ifstream& file) {
 	return {flag == 0 ? Kind::Debug : flag == 0x80 ? Kind::Retail : Kind::Invalid, cnt, size, count, table};
 }
 
-std::string Identity(const fs::path& path) {
-	const auto name = path.generic_u8string();
-	return std::string(reinterpret_cast<const char*>(name.data()), name.size()) + "\n" +
-	       std::to_string(fs::file_size(path)) + "\n" +
-	       std::to_string(fs::last_write_time(path).time_since_epoch().count());
-}
-
-bool Ready(const fs::path& target, const std::string& identity) {
-	std::ifstream marker(target / "package.id", std::ios::binary);
-	std::string stored(identity.size(), '\0');
-	return marker.read(stored.data(), stored.size()) && stored == identity &&
-	       marker.peek() == std::ifstream::traits_type::eof() && fs::is_regular_file(target / "app0/eboot.bin");
-}
 } // namespace
 
 Kind Inspect(const fs::path& path) {
@@ -102,50 +87,4 @@ std::vector<char> ReadMetadata(const fs::path& path, std::string_view member, ui
 	return {};
 }
 
-fs::path Prepare(const fs::path& input, const fs::path& cache, const Extract& extract) {
-	const auto path = fs::canonical(input);
-	switch (Inspect(path)) {
-	case Kind::Invalid: throw std::runtime_error("Invalid or unsupported PS5 PKG header");
-	case Kind::Retail: throw std::runtime_error("Encrypted retail PKG cannot be booted");
-	case Kind::Debug: break;
-	}
-	const auto identity = Identity(path);
-	uint64_t hash = 14695981039346656037ULL;
-	for (unsigned char byte: identity) hash = (hash ^ byte) * 1099511628211ULL;
-	const auto target = cache / std::to_string(hash);
-	if (Ready(target, identity)) return target / "app0";
-	fs::create_directories(cache);
-	std::random_device random;
-	fs::path stage;
-	do {
-		stage = cache / ("unpacking-" + std::to_string(random()) + "-" + std::to_string(random()));
-	} while (!fs::create_directory(stage));
-	struct Cleanup {
-		fs::path stage;
-		~Cleanup() { std::error_code ec; fs::remove_all(stage, ec); }
-	} cleanup {stage};
-	extract(path, stage);
-	const auto source = stage / "source";
-	const auto app = stage / "app0";
-	if (!fs::is_regular_file(source / "eboot.bin") || !fs::is_directory(app))
-		throw std::runtime_error("Package has no bootable application");
-	for (const auto& entry: fs::recursive_directory_iterator(source)) {
-		if (!entry.is_regular_file()) continue;
-		const auto dest = app / entry.path().lexically_relative(source);
-		fs::create_directories(dest.parent_path());
-		// A bundled module may also appear in app0 in its original SELF form.
-		if (fs::exists(dest)) fs::remove(dest);
-		fs::rename(entry.path(), dest);
-	}
-	fs::remove_all(source);
-	if (Identity(path) != identity) throw std::runtime_error("Package changed during extraction");
-	std::ofstream marker(stage / "package.id", std::ios::binary);
-	marker << identity;
-	marker.close();
-	if (!marker) throw std::runtime_error("Could not record package cache identity");
-	std::error_code ec;
-	fs::rename(stage, target, ec);
-	if (ec && !Ready(target, identity)) throw fs::filesystem_error("Could not publish package cache", target, ec);
-	return target / "app0";
-}
 } // namespace Common::Package

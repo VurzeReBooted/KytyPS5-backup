@@ -30,12 +30,12 @@ QString FromPath(const std::filesystem::path& path) {
 bool IsContainer(const QString& base) {
 	const QFileInfo info(base);
 	const auto path = ToPath(base);
-	return info.isFile() && (Common::IsSupportedArchive(path) || Common::Package::IsFilename(path));
+	return info.isFile() && Common::IsSupportedArchive(path);
 }
 
 std::filesystem::path Resolve(const QString& base, const QString& relative) {
 	const auto root = ToPath(base);
-	return IsContainer(base) && Common::IsSupportedArchive(root) ? Common::MakeArchivePath(root, ToPath(relative))
+	return IsContainer(base) ? Common::MakeArchivePath(root, ToPath(relative))
 	                       : root / ToPath(relative);
 }
 

@@ -237,14 +237,19 @@ if(TARGET OpenAL AND CLANG)
 		endif()
 	endif()
 endif()
-# Package preparation reports extraction failures across these translation units.
+# PackageTests uses exceptions for test failures.
 if(MSVC)
 	set(kyty_pkg_exception_flag /EHsc)
 else()
 	set(kyty_pkg_exception_flag -fexceptions)
 endif()
-set_property(SOURCE "${KYTY_SOURCE_DIR}/main.cpp" "${KYTY_TESTS_DIR}/PackageTests.cpp"
+set_property(SOURCE "${KYTY_TESTS_DIR}/PackageTests.cpp"
 	APPEND PROPERTY COMPILE_OPTIONS "${kyty_pkg_exception_flag}")
+
+option(KYTY_BUILD_PKG_READER "Build the read-only PS5 PKG reader (requires Rust 1.88+)" ON)
+if(KYTY_BUILD_PKG_READER)
+	add_subdirectory("${KYTY_SOURCE_DIR}/pkgReader")
+endif()
 
 add_subdirectory("${KYTY_SOURCE_DIR}/common" "${CMAKE_CURRENT_BINARY_DIR}/common")
 
@@ -482,6 +487,7 @@ target_include_directories(page_manager_tests PRIVATE ${inc_headers})
 add_executable(archive_file_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/ArchiveFileTests.cpp"
 	"${KYTY_TESTS_DIR}/PackageTests.cpp"
+	"${KYTY_SOURCE_DIR}/loader/elf.cpp"
 )
 target_link_libraries(archive_file_tests common ZArchive::zarchive)
 target_include_directories(archive_file_tests PRIVATE ${inc_headers})
@@ -1086,6 +1092,15 @@ if(APPLE)
 		COMMENT "Codesign kyty_emulator with JIT entitlements (macOS)")
 endif()
 
+if(KYTY_BUILD_PKG_READER)
+	add_dependencies(kyty_emulator kyty_pkg_reader_build)
+	add_dependencies(archive_file_tests kyty_pkg_reader_build)
+	if(BUILD_TESTING)
+		find_package(Python3 COMPONENTS Interpreter REQUIRED)
+		add_test(NAME package_mount COMMAND "${Python3_EXECUTABLE}"
+			"${KYTY_TESTS_DIR}/PackageMountFixture.py" "$<TARGET_FILE:archive_file_tests>")
+	endif()
+endif()
 install(TARGETS kyty_emulator DESTINATION .)
 if(KYTY_BUILD_LAUNCHER)
 	add_subdirectory("${KYTY_SOURCE_DIR}/launcher" "${CMAKE_CURRENT_BINARY_DIR}/launcher")

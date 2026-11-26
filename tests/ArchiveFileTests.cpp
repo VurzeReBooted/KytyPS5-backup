@@ -258,7 +258,12 @@ void CheckCancellation(const std::filesystem::path &path,
 
 void TestPackages();
 
-int main() {
+int TestPackageMount(const std::filesystem::path&);
+
+int main(int argc, char** argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--pkg-mount") {
+    return TestPackageMount(Common::PathFromUtf8(argv[2]));
+  }
   TestPackages();
   TempDirectory temporary;
   const auto archive_path =
