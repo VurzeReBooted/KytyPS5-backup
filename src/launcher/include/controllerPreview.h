@@ -35,11 +35,13 @@ signals:
 
 private:
 	void UpdateRunning();
+	void ScanGamepads();
 	void OpenGamepad(SDL_JoystickID id);
 	void Refresh();
 	void ApplyColor(SDL_Gamepad* gamepad) const;
 
 	QTimer                             m_timer;
+	Uint64                             m_next_scan = 0;
 	QMap<SDL_JoystickID, SDL_Gamepad*> m_gamepads;
 	QColor                             m_color;
 	bool                               m_preview_enabled = false;
