@@ -4120,7 +4120,11 @@ private:
 					auto* handle = value.Resolve().TryInstruction();
 					if (handle == nullptr || FindIndirectDescriptor(*handle) != nullptr) return;
 					DescriptorSource descriptor;
-					MakeSource(*handle, width, sampler, false, base, descriptor, flags.pc);
+					const bool adjusted = sampler && (memory.image_sample_flags & Decoder::ImageSampleFlagAdjust) != 0u;
+					MakeSource(*handle, width, sampler, adjusted, base, descriptor, flags.pc);
+					// An indirect plan replaces the handle for every use. Only plan an adjusted
+					// sampler here when the table supplies its original fourth word as well.
+					if (adjusted && descriptor.dwords[3].Resolve() != handle->Arg(3).Resolve()) return;
 					uint32_t bad_dword = 0;
 					if (ValidateSource(descriptor, bad_dword)) return;
 					IndirectDescriptorPlan plan;
@@ -4149,8 +4153,7 @@ private:
 						m_indirect_descriptors.push_back(std::move(plan));
 					}
 				};
-				if (inst.GetOpcode() == ValueOpcode::ImageSampleRaw &&
-				    (memory.image_sample_flags & Decoder::ImageSampleFlagAdjust) == 0u) {
+				if (inst.GetOpcode() == ValueOpcode::ImageSampleRaw) {
 					plan_handle(inst.Arg(1), 4u, memory.sampler * 4u, true);
 				}
 				plan_handle(inst.Arg(0), IndirectBufferAccess(inst) ? 4u : 8u,

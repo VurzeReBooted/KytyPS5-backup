@@ -4406,7 +4406,8 @@ void TestCompactScalarImageTable() {
 }
 
 void TestScalarBufferSelectorDomain() {
-  const auto make_plan = [](bool active = true, bool sparse = false, bool uniformize_first = false) {
+  const auto make_plan = [](bool active = true, bool sparse = false, bool uniformize_first = false,
+                            bool adjusted = false) {
     Fixture fixture;
     const auto material = fixture.Buffer({fixture.UserData(0), fixture.UserData(1),
                                           fixture.UserData(2), fixture.UserData(3)});
@@ -4454,6 +4455,7 @@ void TestScalarBufferSelectorDomain() {
     MemoryInfo sample;
     sample.kind = ResourceKind::Image;
     sample.image_dimension = Decoder::ImageDimension::Dim2D;
+    if (adjusted) sample.image_sample_flags = Decoder::ImageSampleFlagAdjust;
     const auto sampler = fixture.Sampler(sampler_words);
     fixture.Emit(ValueOpcode::ImageSampleRaw,
         {fixture.Image(words), sampler, fixture.ImageAddress(), Value(true)},
@@ -4500,7 +4502,6 @@ void TestScalarBufferSelectorDomain() {
   auto plan = make_plan();
   CheckFatal([&] { make_plan(false); }, "not a valid runtime value",
              "scalar selector accepted an empty EXEC lane read");
-  const auto heap_plan = make_plan(false, false, true);
   LinearTestMemory memory;
   memory.words[144u / 4u] = 1u;
   memory.words[160u / 4u] = 99u; // This field is outside the affine offset domain.
@@ -4521,14 +4522,18 @@ void TestScalarBufferSelectorDomain() {
   FakeImageHeap heap;
   auto resident = runtime;
   resident.image_heap = &heap;
-  Check(MaterializeResources(heap_plan, resident, snapshot, specialization) &&
-            heap.requests.size() == 2u && heap.requests[0].base == 0x2000u &&
-            heap.requests[1].base == 0x2200u &&
-            std::ranges::all_of(heap.requests, [](const ImageHeapRequest &request) {
-              return request.size == 3u * 32u && request.step == 32u && request.first == 0u &&
-                     request.count == 3u;
-            }),
-        "address tables at two offsets from one pointer did not request their own heaps");
+  for (const bool adjusted : {false, true}) {
+    const auto heap_plan = make_plan(false, false, true, adjusted);
+    heap.requests.clear();
+    Check(MaterializeResources(heap_plan, resident, snapshot, specialization) &&
+              heap.requests.size() == 2u && heap.requests[0].base == 0x2000u &&
+              heap.requests[1].base == 0x2200u &&
+              std::ranges::all_of(heap.requests, [](const ImageHeapRequest &request) {
+                return request.size == 3u * 32u && request.step == 32u && request.first == 0u &&
+                       request.count == 3u;
+              }),
+          "address tables at two offsets from one pointer did not request their own heaps");
+  }
   memory.watched_address = 0x1000u + 144u;
   Check(MaterializeResources(plan, runtime, snapshot, specialization) &&
             snapshot.images.size() == 3u && memory.watched_reads == 1u &&
