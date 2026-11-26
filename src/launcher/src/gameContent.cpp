@@ -2,6 +2,7 @@
 
 #include "common/archive.h"
 #include "common/file.h"
+#include "common/package.h"
 #include "common/stringUtils.h"
 
 #include <QFileInfo>
@@ -26,14 +27,15 @@ QString FromPath(const std::filesystem::path& path) {
 #endif
 }
 
-bool IsArchive(const QString& base) {
+bool IsContainer(const QString& base) {
 	const QFileInfo info(base);
-	return info.isFile() && Common::IsSupportedArchive(ToPath(base));
+	const auto path = ToPath(base);
+	return info.isFile() && Common::IsSupportedArchive(path);
 }
 
 std::filesystem::path Resolve(const QString& base, const QString& relative) {
 	const auto root = ToPath(base);
-	return IsArchive(base) ? Common::MakeArchivePath(root, ToPath(relative))
+	return IsContainer(base) ? Common::MakeArchivePath(root, ToPath(relative))
 	                       : root / ToPath(relative);
 }
 
@@ -42,6 +44,11 @@ bool FileExists(const QString& base, const QString& relative) {
 }
 
 QByteArray ReadFile(const QString& base, const QString& relative, uint64_t max_size) {
+	const auto path = ToPath(base);
+	if (Common::Package::IsFilename(path) && QFileInfo(base).isFile()) {
+		const auto bytes = Common::Package::ReadMetadata(path, relative.toStdString(), max_size);
+		return QByteArray(bytes.data(), static_cast<qsizetype>(bytes.size()));
+	}
 	return ReadPath(Resolve(base, relative), max_size);
 }
 

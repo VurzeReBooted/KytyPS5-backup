@@ -1904,6 +1904,13 @@ KYTY_SYSV_ABI int VideoOutColorSettingsSetGamma(VideoOutColorSettings* settings,
 	return OK;
 }
 
+KYTY_SYSV_ABI int VideoOutSetGlobalBlendSpace(int handle, uint32_t space, uint32_t option) {
+	PRINT_NAME();
+	if (DriverState().Get(handle) == nullptr) return VIDEO_OUT_ERROR_INVALID_HANDLE;
+	// The compositor currently provides the default blend space.
+	return space == 0 && option == 0 ? OK : VIDEO_OUT_ERROR_INVALID_VALUE;
+}
+
 KYTY_SYSV_ABI int VideoOutAdjustColor(int handle, const VideoOutColorSettings* settings) {
 	PRINT_NAME();
 

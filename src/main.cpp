@@ -1,6 +1,7 @@
 #include "common/archive.h"
 #include "common/common.h"
 #include "common/file.h"
+#include "common/package.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "emulator.h"
@@ -10,6 +11,7 @@
 #include <charconv>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <vector>
 #include <magic_enum.hpp>
@@ -21,9 +23,9 @@ static void PrintUsage() {
 	::printf("%s, %s, ver = %s, git = %s, date = %s\n",
 	         KYTY_BUILD == KYTY_BUILD_DEBUG ? "Debug" : "Release", KYTY_TOOLCHAIN, KYTY_VERSION,
 	         KYTY_GIT_VERSION, __DATE__);
-	::printf("kyty_emulator --game <dir|elf|zar> [options]\n\n");
+	::printf("kyty_emulator --game <dir|elf|zar|pkg> [options]\n\n");
 	::printf("Options:\n");
-	::printf("  --game <dir|elf|zar>                 Game directory, ELF, or ZArchive to load.\n");
+	::printf("  --game <dir|elf|zar|pkg>                 Game directory, ELF, ZArchive, or PS5 debug PKG.\n");
 	::printf("  --game-patch <json>                  ETAHen cheat file.\n");
 	::printf("  --addcont-dir <dir>                  Add-ons (DLC) folder (default: none).\n");
 	::printf(
@@ -232,7 +234,8 @@ static constexpr Flag FLAGS[] = {
 #endif
 };
 
-static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_help) {
+static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_help,
+                      std::shared_ptr<Common::ArchiveReader>& mounted) {
 	show_help = false;
 
 	for (int i = 1; i < argc; i++) {
@@ -272,9 +275,14 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				options.app0_dir = path;
 				options.elf      = "/app0/eboot.bin";
 			} else if (Common::IsSupportedArchive(path) && Common::File::IsFileExisting(path)) {
+				if (Common::Package::IsFilename(path) && Common::Package::Inspect(path) == Common::Package::Kind::Retail) {
+					std::fprintf(stderr, "Encrypted retail PKGs cannot be mounted.\n");
+					return false;
+				}
+				mounted = Common::OpenArchive(path);
 				const auto root = Common::MakeArchivePath(path);
-				if (!Common::File::IsFileExisting(root / "eboot.bin")) {
-					::printf("Archive does not contain eboot.bin: %s\n", value.c_str());
+				if (!mounted || !Common::File::IsFileExisting(root / "eboot.bin")) {
+					::printf("Could not mount archive or find eboot.bin: %s\n", value.c_str());
 					return false;
 				}
 				options.app0_dir = root;
@@ -478,7 +486,8 @@ static int Main(int argc, char* argv[]) {
 		return 0;
 	}
 
-	if (!ParseArgs(argc, argv, options, show_help)) {
+	std::shared_ptr<Common::ArchiveReader> mounted;
+	if (!ParseArgs(argc, argv, options, show_help, mounted)) {
 		PrintUsage();
 		return 1;
 	}

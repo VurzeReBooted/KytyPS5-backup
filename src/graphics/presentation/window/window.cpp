@@ -316,8 +316,40 @@ static void GameEventFinger([[maybe_unused]] const EventFinger& f) {
 #endif
 }
 
+static void OpenHostGamepad(SDL_JoystickID id) {
+	// Startup enumeration and the queued device-added event can report the same pad.
+	if (SDL_GetGamepadFromID(id) != nullptr) {
+		return;
+	}
+	auto* pad = SDL_OpenGamepad(id);
+	if (pad == nullptr) {
+		LOGF("Controller: could not open gamepad %u: %s\n", id, SDL_GetError());
+		return;
+	}
+	LOGF("Controller: opened %s (id %u)\n", SDL_GetGamepadName(pad), id);
+	Controller::Connect(id);
+}
+
+static void OpenConnectedGamepads() {
+	int count = 0;
+	auto* ids = SDL_GetGamepads(&count);
+	if (ids == nullptr) {
+		LOGF("Controller: enumeration failed: %s\n", SDL_GetError());
+		return;
+	}
+	LOGF("Controller: %d mapped gamepad(s) at startup\n", count);
+	for (int i = 0; i < count; ++i) {
+		OpenHostGamepad(ids[i]);
+	}
+	SDL_free(ids);
+}
+
 static void GameEventController([[maybe_unused]] const EventController& f) {
-	EXIT_NOT_IMPLEMENTED(f.remapped);
+	if (f.remapped) {
+		// SDL applies the new mapping to the existing gamepad handle.
+		LOGF("Controller: mapping updated for gamepad %d\n", f.id);
+		return;
+	}
 
 #ifdef KYTY_DBG_INPUT
 	if (f.added || f.removed) {
@@ -335,20 +367,13 @@ static void GameEventController([[maybe_unused]] const EventController& f) {
 #endif
 
 	if (f.added) {
-		auto* pad = SDL_OpenGamepad(f.id);
-		if (pad == nullptr) {
-			LOGF("Controller: ignoring gamepad %d that could not be opened: %s\n", f.id,
-			     SDL_GetError());
-			return;
-		}
-		int id = SDL_GetJoystickID(SDL_GetGamepadJoystick(pad));
-		Controller::Connect(id);
+		OpenHostGamepad(f.id);
 	}
 
 	if (f.removed) {
 		HostInputDisconnectGamepad(f.id);
+		Controller::Disconnect(f.id);
 		if (auto* pad = SDL_GetGamepadFromID(f.id); pad != nullptr) {
-			Controller::Disconnect(f.id);
 			SDL_CloseGamepad(pad);
 		}
 	}
@@ -835,6 +860,7 @@ static void WindowCreate(WindowContext& context) {
 
 	RefreshDisplayLuminance(context.window);
 	SDL_SetWindowPosition(context.window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+	OpenConnectedGamepads();
 	HostInputInit(context.window);
 	InitializeSystemOverlayInput(context.window);
 	context.UpdateIcon();

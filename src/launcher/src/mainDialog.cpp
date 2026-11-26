@@ -320,7 +320,7 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	AddFlag(args, info.renderdoc_enabled, "--rd");
 
 	QString game = info.basedir;
-	if (!info.elf.isEmpty() && !GameContent::IsArchive(info.basedir)) {
+	if (!info.elf.isEmpty() && !GameContent::IsContainer(info.basedir)) {
 		game = QDir(info.basedir).filePath(info.elf);
 	}
 	args << "--game" << game;
@@ -560,7 +560,7 @@ void MainDialogPrivate::Update() {
 	if (run_enabled) {
 		const auto& info = item->GetInfo();
 		auto        dir  = info.basedir;
-		run_enabled      = !dir.isEmpty() && (QDir(dir).exists() || GameContent::IsArchive(dir));
+		run_enabled      = !dir.isEmpty() && (QDir(dir).exists() || GameContent::IsContainer(dir));
 	}
 
 	m_ui->widget->SetRunEnabled(run_enabled);

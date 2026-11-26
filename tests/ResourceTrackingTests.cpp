@@ -4406,7 +4406,8 @@ void TestCompactScalarImageTable() {
 }
 
 void TestScalarBufferSelectorDomain() {
-  const auto make_plan = [](bool active = true, bool sparse = false, bool uniformize_first = false) {
+  const auto make_plan = [](bool active = true, bool sparse = false, bool uniformize_first = false,
+                            bool adjusted = false) {
     Fixture fixture;
     const auto material = fixture.Buffer({fixture.UserData(0), fixture.UserData(1),
                                           fixture.UserData(2), fixture.UserData(3)});
@@ -4454,6 +4455,7 @@ void TestScalarBufferSelectorDomain() {
     MemoryInfo sample;
     sample.kind = ResourceKind::Image;
     sample.image_dimension = Decoder::ImageDimension::Dim2D;
+    if (adjusted) sample.image_sample_flags = Decoder::ImageSampleFlagAdjust;
     const auto sampler = fixture.Sampler(sampler_words);
     fixture.Emit(ValueOpcode::ImageSampleRaw,
         {fixture.Image(words), sampler, fixture.ImageAddress(), Value(true)},
@@ -4500,7 +4502,6 @@ void TestScalarBufferSelectorDomain() {
   auto plan = make_plan();
   CheckFatal([&] { make_plan(false); }, "not a valid runtime value",
              "scalar selector accepted an empty EXEC lane read");
-  const auto heap_plan = make_plan(false, false, true);
   LinearTestMemory memory;
   memory.words[144u / 4u] = 1u;
   memory.words[160u / 4u] = 99u; // This field is outside the affine offset domain.
@@ -4521,14 +4522,18 @@ void TestScalarBufferSelectorDomain() {
   FakeImageHeap heap;
   auto resident = runtime;
   resident.image_heap = &heap;
-  Check(MaterializeResources(heap_plan, resident, snapshot, specialization) &&
-            heap.requests.size() == 2u && heap.requests[0].base == 0x2000u &&
-            heap.requests[1].base == 0x2200u &&
-            std::ranges::all_of(heap.requests, [](const ImageHeapRequest &request) {
-              return request.size == 3u * 32u && request.step == 32u && request.first == 0u &&
-                     request.count == 3u;
-            }),
-        "address tables at two offsets from one pointer did not request their own heaps");
+  for (const bool adjusted : {false, true}) {
+    const auto heap_plan = make_plan(false, false, true, adjusted);
+    heap.requests.clear();
+    Check(MaterializeResources(heap_plan, resident, snapshot, specialization) &&
+              heap.requests.size() == 2u && heap.requests[0].base == 0x2000u &&
+              heap.requests[1].base == 0x2200u &&
+              std::ranges::all_of(heap.requests, [](const ImageHeapRequest &request) {
+                return request.size == 3u * 32u && request.step == 32u && request.first == 0u &&
+                       request.count == 3u;
+              }),
+          "address tables at two offsets from one pointer did not request their own heaps");
+  }
   memory.watched_address = 0x1000u + 144u;
   Check(MaterializeResources(plan, runtime, snapshot, specialization) &&
             snapshot.images.size() == 3u && memory.watched_reads == 1u &&
@@ -7292,6 +7297,37 @@ void TestGpuSelectedFormattedRecordStore() {
        {std::tuple{592u, 0u, false}, std::tuple{65540u, 16u, false}, std::tuple{592u, 16u, true}})
     CheckFatal([&] { make(stride, shift, split); }, "not a valid runtime value",
                "exact record store accepted an unbounded, wrapping or split descriptor offset");
+
+  {
+    constexpr uint32_t rows = 196608u;
+    constexpr uint32_t prefix = 448u;
+    auto packed_fixture = make(16u, 8u);
+    const auto packed_plan = ExtractResourcePlan(packed_fixture->program);
+    LinearTestMemory packed;
+    packed.words.resize(prefix / 4u + rows * 4u);
+    const std::array<uint32_t, 4> entry{0x100000u, 1u << 16u, 20u,
+        (uint32_t(Prospero::BufferFormat::k8SInt) << 12u) | 4u};
+    for (const uint32_t row : {0u, 65536u, rows - 1u})
+      std::ranges::copy(entry, packed.words.begin() + prefix / 4u + row * 4u);
+    packed.words[prefix / 4u + (rows - 1u) * 4u] += 32u;
+    const std::array<uint32_t, 8> packed_data{uint32_t(packed.base), 16u << 16u,
+        rows + prefix / 16u, 0x5204u};
+    const SrtRuntime packed_runtime{.user_data = packed_data, .userdata = &packed,
+        .read_specialization_memory = ReadLinearTestMemory};
+    Check(MaterializeResources(packed_plan, packed_runtime, snapshot, specialization),
+          "large packed buffer table failed to materialize");
+    const auto offset = specialization.buffers[root].indirect_mapping_offset;
+    Check(snapshot.buffers.size() == packed_plan.info.buffers.size() + 2u &&
+              snapshot.flattened_srt.at(offset) == rows &&
+              snapshot.flattened_srt.at(offset + 1u) == 1u &&
+              snapshot.flattened_srt.at(offset + 2u) == 0u &&
+              snapshot.flattened_srt.at(offset + 65537u) == 1u &&
+              snapshot.flattened_srt.at(offset + rows) == 2u && packed.reads < 100u,
+          "packed buffer table lost a late, null or duplicate entry, or read slots individually");
+    packed.fail_address = packed.base + prefix + (rows - 1u) * 16u;
+    Check(!MaterializeResources(packed_plan, packed_runtime, snapshot, specialization),
+          "unreadable final packed buffer batch was accepted");
+  }
 
   auto wide = make(16u, 16u, false, true);
   auto wide_plan = ExtractResourcePlan(wide->program);

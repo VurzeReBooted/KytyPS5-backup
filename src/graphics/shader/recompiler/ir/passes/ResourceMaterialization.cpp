@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fmt/format.h>
 #include <functional>
+#include <map>
 #include <numeric>
 #include <unordered_set>
 
@@ -574,16 +575,17 @@ bool MaterializeIndirectDescriptor(const ResourcePlan&                         p
 	auto& byte_offsets = program.material_keys;
 	const auto children_begin = descriptors.size();
 	const auto root_resource = specializations[resource_index];
+	const auto append_candidate = [&](const DescriptorValue& candidate) {
+		descriptors.push_back(candidate);
+		auto child = root_resource;
+		child.indirect_root = resource_index;
+		specializations.push_back(child);
+	};
 	const auto intern_candidate = [&](const DescriptorValue& candidate) {
 		if (candidate == descriptors[resource_index]) return 0u;
 		const auto found = std::find(descriptors.begin() + children_begin, descriptors.end(), candidate);
 		const auto ordinal = static_cast<uint32_t>(found - descriptors.begin() - children_begin + 1u);
-		if (found == descriptors.end()) {
-			descriptors.push_back(candidate);
-			auto child = root_resource;
-			child.indirect_root = resource_index;
-			specializations.push_back(child);
-		}
+		if (found == descriptors.end()) append_candidate(candidate);
 		return ordinal;
 	};
 	uint64_t table_base = 0;
@@ -730,7 +732,12 @@ bool MaterializeIndirectDescriptor(const ResourcePlan&                         p
 					return true;
 				}
 			}
-			if (child_count == 0u || (!image_heap && count * child_count > MaxIndirectDescriptorProbes))
+			// Packed buffer descriptors occupy the entire stride. Read adjacent slots together
+			// so the probe budget applies to scattered reads, not contiguous records.
+			const bool packed_buffers = std::is_same_v<Specialization, ResourceSpecialization::Buffer> &&
+			    count > MaxIndirectDescriptorProbes && pointer == nullptr && table_value.dword_count == 4u &&
+			    indirect.table_maximum && step == descriptor_bytes && read_dwords == 4u;
+			if (child_count == 0u || (!image_heap && !packed_buffers && count * child_count > MaxIndirectDescriptorProbes))
 				return failed("candidate count", fmt::format("rows={} limit={}", count, MaxIndirectDescriptorProbes));
 			// Affine SMEM offsets wrap in U32 before adding the aligned immediate.
 			// Image heaps retain one bulk snapshot and their absolute byte-offset mapping.
@@ -742,6 +749,8 @@ bool MaterializeIndirectDescriptor(const ResourcePlan&                         p
 			}
 			const auto mapping_offset = snapshot.flattened_srt.size();
 			snapshot.flattened_srt.resize(mapping_offset + 2u, 0u);
+			constexpr uint32_t RowsPerBatch = MaxIndirectDescriptorProbes / 4u;
+			std::map<std::array<uint32_t, 8>, uint32_t> packed_ordinals;
 			for (uint32_t word = 0; word < count; ++word) {
 				const auto table_offset = affine ? first + word * step : uint64_t {word} * 4u;
 				uint64_t pointer_base = 0u;
@@ -759,6 +768,15 @@ bool MaterializeIndirectDescriptor(const ResourcePlan&                         p
 						        std::span(candidate.dwords).first(read_dwords)))
 							return read_failed("child descriptor read", word, child, pointer_base,
 							    uint64_t {child} * pointer->stride + pointer->offset, descriptor_bytes);
+					} else if (packed_buffers) {
+						const auto row = word % RowsPerBatch;
+						if (row == 0u) {
+							heap_words.resize(std::min<uint64_t>(RowsPerBatch, count - word) * read_dwords);
+							if (!ReadScalarTable(table_base, table_size, table_offset, runtime, heap_words))
+								return read_failed("buffer table read", word, 0u, table_base, table_offset,
+								                   heap_words.size() * sizeof(uint32_t));
+						}
+						std::copy_n(heap_words.begin() + row * read_dwords, read_dwords, candidate.dwords.begin());
 					} else if (!image_heap) {
 						if (!ReadScalarTable(table_base, table_size, table_offset, runtime,
 						                     std::span(candidate.dwords).first(read_dwords))) return false;
@@ -771,7 +789,18 @@ bool MaterializeIndirectDescriptor(const ResourcePlan&                         p
 					if (!normalize(candidate))
 						return normalization_failed(table_offset, word, step,
 						                            indirect.table_maximum ? "key" : "probe");
-					const auto ordinal = intern_candidate(candidate);
+					uint32_t ordinal;
+					if (packed_buffers) {
+						if (candidate == descriptors[resource_index]) continue;
+						const auto [entry, added] = packed_ordinals.try_emplace(candidate.dwords, 0u);
+						if (added) {
+							if (packed_ordinals.size() > MaxIndirectDescriptorProbes)
+								return failed("distinct buffer descriptor count");
+							entry->second = static_cast<uint32_t>(packed_ordinals.size());
+							append_candidate(candidate);
+						}
+						ordinal = entry->second;
+					} else ordinal = intern_candidate(candidate);
 					if (ordinal == 0u) continue;
 					const auto mapping_word = image_heap ? table_offset / 4u : word * child_count + child;
 					snapshot.flattened_srt.resize(mapping_offset + 2u + mapping_word, 0u);

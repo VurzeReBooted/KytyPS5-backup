@@ -40,6 +40,7 @@ target_link_libraries(common
 		cpuinfo
 		kyty_git_version
 		spdlog::spdlog
+		SDL3::SDL3-static
 		ZArchive::zarchive
 		nlohmann_json::nlohmann_json
 )

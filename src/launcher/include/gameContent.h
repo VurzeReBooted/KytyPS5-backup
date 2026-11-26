@@ -15,7 +15,7 @@ inline constexpr uint64_t MaxImageSize         = uint64_t {32} << 20u;
 
 [[nodiscard]] std::filesystem::path ToPath(const QString& path);
 [[nodiscard]] QString               FromPath(const std::filesystem::path& path);
-[[nodiscard]] bool                  IsArchive(const QString& base);
+[[nodiscard]] bool                  IsContainer(const QString& base);
 [[nodiscard]] std::filesystem::path Resolve(const QString& base, const QString& relative);
 [[nodiscard]] bool                  FileExists(const QString& base, const QString& relative);
 [[nodiscard]] QByteArray            ReadPath(const std::filesystem::path& path, uint64_t max_size);

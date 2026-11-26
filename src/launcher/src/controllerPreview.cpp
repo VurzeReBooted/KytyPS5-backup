@@ -108,12 +108,7 @@ void ControllerPreview::UpdateRunning() {
 			return;
 		}
 		m_error.clear();
-		int   count = 0;
-		auto* ids   = SDL_GetGamepads(&count);
-		for (int index = 0; index < count; ++index) {
-			OpenGamepad(ids[index]);
-		}
-		SDL_free(ids);
+		m_next_scan = 0;
 		m_timer.start();
 		Refresh();
 		emit StateChanged();
@@ -134,6 +129,35 @@ void ControllerPreview::UpdateRunning() {
 	m_device_name.clear();
 	m_error = m_suspended ? tr("Preview is paused while a game is running.") : QString();
 	emit StateChanged();
+}
+
+void ControllerPreview::ScanGamepads() {
+	QString error;
+	int count = 0;
+	auto* ids = SDL_GetJoysticks(&count);
+	if (ids == nullptr) {
+		error = QString::fromUtf8(SDL_GetError());
+	}
+	for (int i = 0; i < count; ++i) {
+		const auto id = ids[i];
+		const auto name = QString::fromUtf8(SDL_GetJoystickNameForID(id));
+		if (SDL_IsGamepad(id)) {
+			OpenGamepad(id);
+			if (!m_gamepads.contains(id)) {
+				error = tr("Could not open %1: %2").arg(name, QString::fromUtf8(SDL_GetError()));
+			}
+		} else if (error.isEmpty()) {
+			error = tr("%1 is visible to SDL but has no gamepad mapping.").arg(name);
+		}
+	}
+	SDL_free(ids);
+	if (!m_gamepads.isEmpty()) {
+		error.clear();
+	}
+	if (m_error != error) {
+		m_error = error;
+		emit StateChanged();
+	}
 }
 
 void ControllerPreview::OpenGamepad(SDL_JoystickID id) {
@@ -157,6 +181,15 @@ void ControllerPreview::Refresh() {
 				SDL_CloseGamepad(gamepad);
 			}
 		}
+	}
+
+	// A Bluetooth device may become accessible after the first add notification.
+	if (m_gamepads.isEmpty() && SDL_GetTicks() >= m_next_scan) {
+		m_next_scan = SDL_GetTicks() + 1000;
+		ScanGamepads();
+	} else if (!m_gamepads.isEmpty() && !m_error.isEmpty()) {
+		m_error.clear();
+		emit StateChanged();
 	}
 
 	QSet<QString> pressed;

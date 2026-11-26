@@ -395,6 +395,24 @@ folders recursively for game directories containing `eboot.bin` and ZArchive (`.
 whose archive root contains `eboot.bin`. Select a detected game and run it from the game list.
 ZArchive dumps are mounted read-only and streamed directly; they do not need to be extracted first.
 
+The same scan discovers PS5 finalized-image packages (`.pkg`, case-insensitive), including in
+subfolders. It reads title details and artwork from the package metadata without unpacking the game.
+Encrypted retail packages are labeled in the list. Boot supports unencrypted debug packages with
+a NAPS filesystem layout supported by the extractor.
+
+Select a supported PKG and click **Run**, or pass the package to the emulator:
+
+```sh
+kyty_emulator --game "/games/ExampleGame.pkg"
+```
+
+Kyty mounts the game read-only as `/app0`. The bundled `kyty_pkg_reader` reads the
+filesystem index and decodes requested ranges in memory. Booting does not extract a game
+directory or create a package cache. Install Rust 1.88 or newer when building Kyty with
+PKG support. CMake builds the reader using the pinned [pkg-to-anyps5 decoder](https://github.com/awake-devel/pkg-to-anyps5).
+The standalone extractor is no longer needed. For an x86-64 macOS build on Apple Silicon, run
+`rustup target add x86_64-apple-darwin` before configuring.
+
 Official release builds include a built-in updater. Leave **Check for updates on startup** enabled,
 or click **Check for updates**, then choose **Install Update**. The launcher downloads the package
 for your platform from GitHub, checks its SHA-256 checksum, and restarts after installation. Close
